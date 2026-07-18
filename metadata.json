@@ -1,0 +1,11 @@
+{
+  "name": "Judy - Lavender Rhino Travel Interpreter",
+  "description": "Meet Judy, a witty talking lavender Rhino travel companion who translates languages, generates custom itineraries, offers funny camera filters, and acts as your ultimate travel interpreter.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
