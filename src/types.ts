@@ -6,6 +6,18 @@ export interface TranslationResult {
   timestamp: number;
 }
 
+export type TranslationJobStatus = "queued" | "submitted" | "processing" | "completed" | "failed";
+
+export interface TranslationJob {
+  id: string;
+  status: TranslationJobStatus;
+  hermesJobId?: string;
+  result?: TranslationResult;
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ItineraryDay {
   day: number;
   title: string;

@@ -1,298 +1,220 @@
-import express from "express";
-import path from "path";
-import { GoogleGenAI, Type } from "@google/genai";
 import dotenv from "dotenv";
+import express from "express";
+import path from "node:path";
+import { createServer as createViteServer } from "vite";
+import { GeminiService, GEMINI_MODEL } from "./server/geminiService";
+import { HermesClient } from "./server/hermesClient";
+import { TranslationStore } from "./server/translationStore";
+import { TranslationWorker } from "./server/translationWorker";
 
 dotenv.config();
 
-// Initialize Gemini Client safely
-let ai: GoogleGenAI | null = null;
-const apiKey = process.env.GEMINI_API_KEY;
-
-if (apiKey) {
-  ai = new GoogleGenAI({
-    apiKey: apiKey,
-    httpOptions: {
-      headers: {
-        "User-Agent": "aistudio-build",
-      },
-    },
-  });
-} else {
-  console.warn("WARNING: GEMINI_API_KEY is not defined. AI features will fallback to mock humor responses.");
-}
-
 const app = express();
-const PORT = 3000;
+const port = Number(process.env.PORT) || 3000;
+const hermesGatewayUrl = process.env.HERMES_GATEWAY_URL?.trim() || "";
+const store = new TranslationStore(path.resolve(process.env.JUDY_DATA_DIR || "./data"));
+const hermes = new HermesClient(
+  hermesGatewayUrl,
+  process.env.HERMES_BEARER_TOKEN?.trim() || undefined,
+  numberFromEnv("HERMES_REQUEST_TIMEOUT_MS", 15_000),
+);
+const worker = new TranslationWorker(store, hermes, {
+  pollIntervalMs: numberFromEnv("HERMES_POLL_INTERVAL_MS", 2_000),
+  maxAttempts: numberFromEnv("HERMES_MAX_ATTEMPTS", 90),
+  maxJobDurationMs: numberFromEnv("HERMES_JOB_TIMEOUT_MS", 600_000),
+});
+const gemini = process.env.GEMINI_API_KEY?.trim()
+  ? new GeminiService(process.env.GEMINI_API_KEY.trim(), GEMINI_MODEL)
+  : null;
 
-// Enable JSON parser with high limit for webcam images
+app.disable("x-powered-by");
 app.use(express.json({ limit: "15mb" }));
 
-// 1. Translation Endpoint
-app.post("/api/translate", async (req, res) => {
-  const { text, targetLanguage } = req.body;
+app.get("/api/health", (_req, res) => {
+  res.json({
+    status: "ok",
+    hermesConfigured: Boolean(hermesGatewayUrl),
+    geminiConfigured: Boolean(gemini),
+    geminiModel: GEMINI_MODEL,
+  });
+});
+
+const createTranslation = async (req: express.Request, res: express.Response) => {
+  const text = typeof req.body?.text === "string" ? req.body.text.trim() : "";
+  const targetLanguage = typeof req.body?.targetLanguage === "string"
+    ? req.body.targetLanguage.trim()
+    : "";
   if (!text || !targetLanguage) {
-    return res.status(400).json({ error: "Missing text or targetLanguage" });
+    return res.status(400).json({ error: "text and targetLanguage are required" });
+  }
+  if (text.length > 10_000 || targetLanguage.length > 80) {
+    return res.status(413).json({ error: "Translation request is too large" });
+  }
+  if (!hermesGatewayUrl) {
+    return res.status(503).json({ error: "Hermes translation service is not configured" });
   }
 
-  // Check if API key is configured
-  if (!ai) {
-    // Elegant witty fallback
-    const offlineFallback = {
-      originalText: text,
-      translatedText: `[Mock Translation to ${targetLanguage}] "${text}"`,
-      culturalInsight: "Oh honey, my stellar AI brain is offline! But here is a general tip: smile, wave, and order another sparkling rosé. It solves everything!",
-      languageCode: targetLanguage,
-      timestamp: Date.now()
-    };
-    return res.json(offlineFallback);
-  }
+  const job = await store.create({
+    text,
+    targetLanguage,
+    source: typeof req.body?.source === "string" ? req.body.source : "judy-web",
+    idempotencyKey:
+      req.get("Idempotency-Key") ||
+      (typeof req.body?.idempotencyKey === "string" ? req.body.idempotencyKey : undefined),
+  });
+  void worker.runOnce();
+  return res.status(job.status === "completed" ? 200 : 202).json({ job });
+};
 
-  try {
-    const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
-      contents: `Translate the following phrase into ${targetLanguage}: "${text}". Provide a witty, sassy, but genuinely useful cultural insight or etiquette warning about this phrase, country, or custom.`,
-      config: {
-        systemInstruction: "You are Judy, a fabulous, travel-loving, witty gay companion who happens to be an elegant lavender Rhino. Speak with absolute charisma, high energy, and queer slang. Use loving names like 'darling', 'honey', 'gorgeous', 'sweetheart', and 'diva'. Translate the phrase accurately, and then provide a hilarious and sassy, yet practical cultural insight, warning the user of any hilarious etiquette disasters or how to charm the locals. Return response in a clean JSON format matching the schema.",
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            translatedText: {
-              type: Type.STRING,
-              description: "The literal and correct translation of the input phrase into the target language.",
-            },
-            culturalInsight: {
-              type: Type.STRING,
-              description: "Judy's highly entertaining, fabulous, and informative cultural insight or etiquette tip related to this scenario.",
-            },
-          },
-          required: ["translatedText", "culturalInsight"],
-        },
-      },
-    });
+app.post("/api/translation-requests", createTranslation);
+app.post("/api/translate", createTranslation);
 
-    const data = JSON.parse(response.text || "{}");
-    return res.json({
-      originalText: text,
-      translatedText: data.translatedText || "",
-      culturalInsight: data.culturalInsight || "Darling, no cultural feedback is needed here. You look stunning anyway!",
-      languageCode: targetLanguage,
-      timestamp: Date.now(),
-    });
-  } catch (error: any) {
-    console.error("Translation API Error:", error);
-    return res.status(500).json({
-      error: "Could not translate. Judy might be sipping mimosas. Please try again!",
-      details: error.message
-    });
-  }
+app.get("/api/translation-requests", (req, res) => {
+  res.json({ jobs: store.list(numberFromQuery(req.query.limit, 25)) });
 });
 
-// 2. Itinerary Generator Endpoint
+app.get("/api/translation-requests/:id", (req, res) => {
+  const job = store.get(req.params.id);
+  if (!job) return res.status(404).json({ error: "Translation request not found" });
+  return res.json({ job });
+});
+
+app.get("/api/completion-log", async (req, res) => {
+  res.json({ entries: await store.readCompletionLog(numberFromQuery(req.query.limit, 50)) });
+});
+
 app.post("/api/itinerary", async (req, res) => {
-  const { destination, days, travelStyle } = req.body;
+  const { destination, days, travelStyle } = req.body ?? {};
   if (!destination || !days || !travelStyle) {
-    return res.status(400).json({ error: "Missing required query parameters" });
+    return res.status(400).json({ error: "destination, days, and travelStyle are required" });
   }
-
-  const numDays = Math.min(Math.max(parseInt(days) || 3, 1), 7); // Safe limit 1-7 days
-
-  if (!ai) {
-    // Witty Fallback
-    const mockItinerary = {
-      id: `itinerary-${Date.now()}`,
-      destination,
-      days: numDays,
-      travelStyle,
-      title: `Judy's Fabulous ${destination} Escape`,
-      overview: `Darling, without my AI connection, I can only dream! But a ${travelStyle} queen in ${destination} is a match made in heaven. Prepare for sheer luxury and dramatic scenic walks!`,
-      daysList: Array.from({ length: numDays }).map((_, index) => ({
-        day: index + 1,
-        title: `Sashay through Day ${index + 1}`,
-        morning: "Wake up late. Put on oversized sunglasses. Demand espresso.",
-        afternoon: "Wander through local floral boutiques. Gossip with handsome shopkeepers.",
-        evening: "Sunset cocktails on a rooftop, looking effortlessly brilliant.",
-        judysTip: "If anyone asks, you are an incognito heiress who forgot her jewelry box."
-      })),
-      timestamp: Date.now()
-    };
-    return res.json(mockItinerary);
-  }
-
+  if (!gemini) return res.status(503).json({ error: "Gemini is not configured" });
+  const numDays = Math.min(Math.max(Number.parseInt(String(days), 10) || 3, 1), 7);
   try {
-    const prompt = `Generate a personalized travel itinerary for ${numDays} days in ${destination} with a "${travelStyle}" travel style. Include humorous travel warnings, fabulous queer-friendly/inclusive vibes, and highly specific local activities. Make it funny, structured, and extremely creative.`;
-
-    const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
-      contents: prompt,
-      config: {
-        systemInstruction: "You are Judy, the fabulous lavender Rhino gay travel companion. Create a hilarious, glamorous, and customized day-by-day travel itinerary. Your response must be in JSON and follow the requested schema exactly. Every day should have a dramatic title, morning/afternoon/evening plans, and Judy's signature dramatic travel tip.",
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            title: {
-              type: Type.STRING,
-              description: "A sassy, themed title for the entire itinerary (e.g. 'Judy's Dramatic Venetian Gondola Meltdown').",
-            },
-            overview: {
-              type: Type.STRING,
-              description: "Judy's overview of this destination and travel style, highlighting why the user is either a genius or completely unhinged for choosing it.",
-            },
-            daysList: {
-              type: Type.ARRAY,
-              description: "A list of days in the itinerary.",
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  day: { type: Type.INTEGER, description: "The day number." },
-                  title: { type: Type.STRING, description: "The title of the day's theme." },
-                  morning: { type: Type.STRING, description: "Judy's recommendation for the morning." },
-                  afternoon: { type: Type.STRING, description: "Judy's recommendation for the afternoon." },
-                  evening: { type: Type.STRING, description: "Judy's recommendation for the evening." },
-                  judysTip: { type: Type.STRING, description: "Judy's specific witty tip or etiquette warning for this day." },
-                },
-                required: ["day", "title", "morning", "afternoon", "evening", "judysTip"],
-              },
-            },
-          },
-          required: ["title", "overview", "daysList"],
-        },
-      },
-    });
-
-    const parsedData = JSON.parse(response.text || "{}");
+    const parsed = await gemini.generateStructured<{
+      title: string;
+      overview: string;
+      daysList: Array<Record<string, unknown>>;
+    }>(
+      `Create a ${numDays}-day ${travelStyle} itinerary for ${destination}. Include specific local activities, inclusive and queer-friendly context, and practical etiquette warnings.`,
+      "You are Judy, a warm, witty lavender-rhino travel companion. Be playful without stereotyping. Return only schema-valid JSON.",
+      itinerarySchema,
+    );
     return res.json({
       id: `itinerary-${Date.now()}`,
       destination,
       days: numDays,
       travelStyle,
-      title: parsedData.title || `Fabulous Escape to ${destination}`,
-      overview: parsedData.overview || "Time to pack those sequins, darling!",
-      daysList: parsedData.daysList || [],
-      timestamp: Date.now()
+      ...parsed,
+      timestamp: Date.now(),
+      model: GEMINI_MODEL,
     });
-  } catch (error: any) {
-    console.error("Itinerary API Error:", error);
-    return res.status(500).json({
-      error: "Judy could not plan your trip. She might be locked in a luxury spa. Try again soon, sweetheart!"
-    });
+  } catch (error) {
+    console.error("Itinerary API error", error);
+    return res.status(502).json({ error: "Gemini could not create the itinerary" });
   }
 });
 
-// 3. AI Enhanced Photo Editor Endpoint (Multimodal)
 app.post("/api/enhance-photo", async (req, res) => {
-  const { base64Image, mishapDescription } = req.body;
-
+  const { base64Image, mishapDescription } = req.body ?? {};
   if (!base64Image && !mishapDescription) {
-    return res.status(400).json({ error: "Please provide a photo or a description of your travel mishap!" });
+    return res.status(400).json({ error: "A photo or mishap description is required" });
   }
-
-  if (!ai) {
-    // Offline Fallback
-    return res.json({
-      cinematicTitle: "The Unsynchronized Catastrophe",
-      judysCritique: "Oh my darling, my AI eye is currently resting with cucumber slices! But looking at this, it is pure high drama. Your styling is exquisite even in the face of disaster.",
-      rescuePlan: [
-        "1. Inhale a deep breath of lavender breeze.",
-        "2. Find the nearest outdoor café, take a seat, and look incredibly wealthy and bothered.",
-        "3. Blame it on the local mercury retrograde. Works every single time!"
-      ],
-      stickerRecommendation: ["diva_in_distress", "send_help", "fabulous_disaster"]
-    });
-  }
-
+  if (!gemini) return res.status(503).json({ error: "Gemini is not configured" });
   try {
-    let contents: any[] = [];
-
-    if (base64Image) {
-      // Split header data if included
-      const base64Data = base64Image.includes(",") ? base64Image.split(",")[1] : base64Image;
-      const mimeType = base64Image.includes("image/jpeg") || base64Image.includes("jpg") ? "image/jpeg" : "image/png";
-
-      contents.push({
-        inlineData: {
-          mimeType: mimeType,
-          data: base64Data
-        }
+    const input: Array<Record<string, unknown>> = [];
+    if (typeof base64Image === "string" && base64Image) {
+      const [header, data = header] = base64Image.includes(",")
+        ? base64Image.split(",", 2)
+        : ["", base64Image];
+      input.push({
+        type: "image",
+        data,
+        mime_type: header.includes("image/jpeg") ? "image/jpeg" : "image/png",
       });
     }
-
-    const textPrompt = `Analyze this travel photo and mishap description: "${mishapDescription || "A beautiful, hilarious travel accident!"}". Judy, act as a fabulous travel companion and critique this mishap. Provide:
-    1. A dramatic and humorous cinematic title for this mishap.
-    2. Judy's sassy, theatrical, and loving critique. Be funny about how 'unfortunate' yet 'cinematic' this looks!
-    3. Judy's dramatic 3-step rescue plan to save the day in style.
-    4. 2 or 3 recommended stickers that match this disaster. Choose from: 'send_help', 'diva_in_distress', 'fabulous_disaster', 'judy_approved', 'lost_in_translation', 'total_drama'.`;
-
-    contents.push({ text: textPrompt });
-
-    const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
-      contents: contents,
-      config: {
-        systemInstruction: "You are Judy, a fabulous, sassy, and dramatic lavender Rhino gay travel companion who reviews and 'enhances' travel disasters. Look at the photo (if provided) and text, and write a theatrical, loving, and humorous response in JSON according to the schema.",
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            cinematicTitle: {
-              type: Type.STRING,
-              description: "A funny cinematic title for the catastrophe (e.g. 'Shattered Dreams on the Spanish Steps')."
-            },
-            judysCritique: {
-              type: Type.STRING,
-              description: "Judy's theatrical, humorous, and supportive review of the mishap pictured or described."
-            },
-            rescuePlan: {
-              type: Type.ARRAY,
-              description: "A hilarious and mildly practical 3-step guide on how to handle the situation with class.",
-              items: { type: Type.STRING }
-            },
-            stickerRecommendation: {
-              type: Type.ARRAY,
-              description: "Stickers to overlay on the photo.",
-              items: { type: Type.STRING }
-            }
-          },
-          required: ["cinematicTitle", "judysCritique", "rescuePlan", "stickerRecommendation"]
-        }
-      }
+    input.push({
+      type: "text",
+      text: `Review this travel mishap: ${mishapDescription || "an unexpected travel moment"}. Give it a cinematic title, a kind witty critique, a practical three-step rescue plan, and 2–3 sticker recommendations.`,
     });
-
-    const parsed = JSON.parse(response.text || "{}");
-    return res.json(parsed);
-
-  } catch (error: any) {
-    console.error("Enhance Photo API Error:", error);
-    return res.status(500).json({
-      error: "Judy could not analyze your beautiful disaster right now. She recommends taking a deep breath and a sip of Prosecco!",
-      details: error.message
-    });
+    const parsed = await gemini.generateStructured<Record<string, unknown>>(
+      input,
+      "You are Judy, a warm and theatrical lavender-rhino travel companion. Be funny, supportive, and practical. Return only schema-valid JSON.",
+      photoSchema,
+    );
+    return res.json({ ...parsed, model: GEMINI_MODEL });
+  } catch (error) {
+    console.error("Photo API error", error);
+    return res.status(502).json({ error: "Gemini could not review the travel photo" });
   }
 });
 
-// Vite / Static Files Bridge
-import { createServer as createViteServer } from "vite";
+async function start(): Promise<void> {
+  await store.initialize();
+  if (hermesGatewayUrl) worker.start();
+  else console.warn("HERMES_GATEWAY_URL is not set; online translation intake will return 503");
+  if (!gemini) console.warn("GEMINI_API_KEY is not set; Gemini features will return 503");
 
-async function setupServer() {
   if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
+    const vite = await createViteServer({ server: { middlewareMode: true }, appType: "spa" });
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
-    app.get("*", (req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
-    });
+    app.get("*", (_req, res) => res.sendFile(path.join(distPath, "index.html")));
   }
-
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Judy's backend is sashaying on http://0.0.0.0:${PORT}`);
-  });
+  app.listen(port, "0.0.0.0", () => console.log(`Judy is listening on http://0.0.0.0:${port}`));
 }
 
-setupServer();
+const itinerarySchema = {
+  type: "object",
+  properties: {
+    title: { type: "string" },
+    overview: { type: "string" },
+    daysList: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          day: { type: "integer" },
+          title: { type: "string" },
+          morning: { type: "string" },
+          afternoon: { type: "string" },
+          evening: { type: "string" },
+          judysTip: { type: "string" },
+        },
+        required: ["day", "title", "morning", "afternoon", "evening", "judysTip"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["title", "overview", "daysList"],
+  additionalProperties: false,
+};
+
+const photoSchema = {
+  type: "object",
+  properties: {
+    cinematicTitle: { type: "string" },
+    judysCritique: { type: "string" },
+    rescuePlan: { type: "array", items: { type: "string" }, minItems: 3, maxItems: 3 },
+    stickerRecommendation: { type: "array", items: { type: "string" }, minItems: 2, maxItems: 3 },
+  },
+  required: ["cinematicTitle", "judysCritique", "rescuePlan", "stickerRecommendation"],
+  additionalProperties: false,
+};
+
+function numberFromEnv(name: string, fallback: number): number {
+  const value = Number(process.env[name]);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function numberFromQuery(value: unknown, fallback: number): number {
+  const parsed = Number(Array.isArray(value) ? value[0] : value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+void start().catch((error) => {
+  console.error("Judy failed to start", error);
+  process.exitCode = 1;
+});

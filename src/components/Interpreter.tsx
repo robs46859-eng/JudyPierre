@@ -2,12 +2,39 @@ import React, { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Mic, MicOff, Volume2, Globe, Wifi, WifiOff, RefreshCw, Star, Sparkles, BookOpen, Search } from "lucide-react";
 import { OFFLINE_DICTIONARY, SUPPORTED_LANGUAGES } from "../data/offlineDictionary";
-import { TranslationResult } from "../types";
+import { TranslationJob, TranslationResult } from "../types";
 
 interface InterpreterProps {
   isOffline: boolean;
   onTalkingChange: (talking: boolean) => void;
   onSetJudyQuote: (quote: string) => void;
+}
+
+async function waitForTranslation(
+  initialJob: TranslationJob,
+  onStatus: (status: TranslationJob["status"]) => void,
+): Promise<TranslationJob> {
+  let job = initialJob;
+  const deadline = Date.now() + 180_000;
+  while (!["completed", "failed"].includes(job.status)) {
+    if (Date.now() >= deadline) throw new Error("Hermes is still working; check the completion log shortly.");
+    onStatus(job.status);
+    await new Promise((resolve) => window.setTimeout(resolve, 1_000));
+    const response = await fetch(`/api/translation-requests/${encodeURIComponent(job.id)}`);
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error || "Could not read translation status");
+    job = body.job as TranslationJob;
+  }
+  onStatus(job.status);
+  if (job.status === "failed") throw new Error(job.error || "Hermes translation failed");
+  return job;
+}
+
+function formatJobStatus(status: TranslationJob["status"] | null): string {
+  if (status === "queued") return "Queued";
+  if (status === "submitted") return "Sent to Hermes";
+  if (status === "processing") return "Translating";
+  return "Starting";
 }
 
 export const Interpreter: React.FC<InterpreterProps> = ({
@@ -19,6 +46,7 @@ export const Interpreter: React.FC<InterpreterProps> = ({
   const [targetLang, setTargetLang] = useState("Spanish");
   const [isTranslating, setIsTranslating] = useState(false);
   const [result, setResult] = useState<TranslationResult | null>(null);
+  const [jobStatus, setJobStatus] = useState<TranslationJob["status"] | null>(null);
   
   // Voice recognition states
   const [isListening, setIsListening] = useState(false);
@@ -123,24 +151,28 @@ export const Interpreter: React.FC<InterpreterProps> = ({
         setIsTranslating(false);
       }, 600);
     } else {
-      // 2. Real-time Full-Stack API call
+      // 2. Queue the request, then follow the Hermes job through completion.
       try {
-        const response = await fetch("/api/translate", {
+        setJobStatus("queued");
+        const response = await fetch("/api/translation-requests", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text, targetLanguage: targetLang }),
+          body: JSON.stringify({ text, targetLanguage: targetLang, source: "judy-web" }),
         });
         const data = await response.json();
-        if (data.error) throw new Error(data.error);
+        if (!response.ok || data.error) throw new Error(data.error || "Translation request failed");
 
-        setResult(data);
-        onSetJudyQuote(`"${data.translatedText}" - Slayed it, darling!`);
+        const completedJob = await waitForTranslation(data.job as TranslationJob, setJobStatus);
+        if (!completedJob.result) throw new Error("Hermes completed without a result");
+        setResult(completedJob.result);
+        onSetJudyQuote(`"${completedJob.result.translatedText}" — ready, darling!`);
       } catch (err: any) {
         console.error(err);
+        setJobStatus("failed");
         setResult({
           originalText: text,
-          translatedText: "Oops, my translation horn malfunctioned!",
-          culturalInsight: "Oh gorgeous, my server seems to be having a theatrical meltdown. Take a sip of your beverage and try again!",
+          translatedText: "Translation unavailable",
+          culturalInsight: err.message || "Hermes could not complete this request. Try again in a moment.",
           languageCode: targetLang,
           timestamp: Date.now(),
         });
@@ -255,8 +287,15 @@ export const Interpreter: React.FC<InterpreterProps> = ({
                 <WifiOff className="w-3.5 h-3.5" /> Offline Mode
               </span>
             ) : (
-              <span className="inline-flex items-center gap-1 bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-bold px-2.5 py-0.5 rounded-full">
-                <Wifi className="w-3.5 h-3.5" /> Cloud Active
+              <span className={`inline-flex items-center gap-1 border text-xs font-bold px-2.5 py-0.5 rounded-full ${
+                jobStatus === "failed"
+                  ? "bg-rose-50 text-rose-700 border-rose-200"
+                  : isTranslating
+                    ? "bg-violet-50 text-violet-700 border-violet-200"
+                    : "bg-emerald-50 text-emerald-700 border-emerald-200"
+              }`}>
+                {isTranslating ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Wifi className="w-3.5 h-3.5" />}
+                {isTranslating ? formatJobStatus(jobStatus) : jobStatus === "failed" ? "Needs retry" : "Hermes ready"}
               </span>
             )}
           </div>

@@ -125,13 +125,22 @@ export const JudyAvatar: React.FC<JudyAvatarProps> = ({
       </motion.div>
 
       {/* Judy Illustration Container */}
-      <div className="cursor-pointer group relative w-48 h-48" onClick={handleRhinoClick}>
+      <div
+        className="cursor-pointer group relative w-full h-64 rounded-[2rem] overflow-hidden border border-pink-100 bg-gradient-to-b from-white via-pink-50/60 to-purple-100/70 shadow-[0_24px_70px_-38px_rgba(88,28,135,0.7)]"
+        onClick={handleRhinoClick}
+        role="button"
+        tabIndex={0}
+        aria-label="Ask Judy for a travel thought"
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") handleRhinoClick();
+        }}
+      >
         {/* Cute Floral Halo / Crown behind her */}
         <div className="absolute inset-0 bg-radial from-pink-200/50 to-transparent rounded-full scale-125 blur-xl group-hover:scale-135 transition-all duration-500 pointer-events-none" />
         
         {/* Sassy Flower decoration indicator */}
-        <div className="absolute -top-3 -right-2 text-3xl animate-bounce pointer-events-none z-10">🌸</div>
-        <div className="absolute -bottom-1 -left-3 text-2xl animate-spin-slow pointer-events-none z-10">🌺</div>
+        <div className="absolute top-4 right-5 text-3xl animate-bounce pointer-events-none z-10">🌸</div>
+        <div className="absolute bottom-4 left-5 text-2xl animate-spin-slow pointer-events-none z-10">🌺</div>
 
         {glbUrl ? (
           /* Render 3D Model if glbUrl is provided, fallback to SVG on error */
@@ -165,13 +174,14 @@ export const JudyAvatar: React.FC<JudyAvatarProps> = ({
             </motion.div>
           }>
             <div className="w-full h-full absolute inset-0 z-0">
-              <Canvas camera={{ position: [0, 0, 5], fov: 45 }}>
-                <ambientLight intensity={0.5} />
-                <directionalLight position={[10, 10, 5]} intensity={1} />
+              <Canvas camera={{ position: [0, 0.1, 4], fov: 32 }} dpr={[1, 1.75]}>
+                <ambientLight intensity={1.15} />
+                <directionalLight position={[3, 5, 4]} intensity={2.1} />
+                <directionalLight position={[-3, 2, -2]} intensity={0.8} color="#d8b4fe" />
                 <Environment preset="city" />
                 <Suspense fallback={null}>
                   <Judy3DModel url={glbUrl} isTalking={isTalking} mood={mood} audioUrl={audioUrl} />
-                  <ContactShadows position={[0, -1.2, 0]} opacity={0.4} scale={10} blur={2} far={4} />
+                  <ContactShadows position={[0, -1.08, 0]} opacity={0.32} scale={5} blur={2.5} far={3} />
                 </Suspense>
               </Canvas>
             </div>
