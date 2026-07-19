@@ -5,7 +5,7 @@
 
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { Globe, Calendar, Camera, Wifi, WifiOff, Heart, Sparkles } from "lucide-react";
+import { Globe, Calendar, Camera, Wifi, WifiOff, Heart } from "lucide-react";
 import { JudyAvatar } from "./components/JudyAvatar";
 import { Interpreter } from "./components/Interpreter";
 import { ItineraryPlanner } from "./components/ItineraryPlanner";
@@ -47,7 +47,7 @@ export default function App() {
       <div className="absolute bottom-20 right-5 text-4xl opacity-10 pointer-events-none select-none animate-spin-slow">🌻</div>
 
       {/* Main Responsive Mobile Frame */}
-      <main className="w-full max-w-md px-4 pt-6 flex flex-col gap-6 relative z-10">
+      <main className="w-full max-w-lg px-4 pt-5 md:pt-8 flex flex-col gap-5 relative z-10">
         
         {/* Header App Bar */}
         <header className="bg-white/80 backdrop-blur-md rounded-3xl p-5 border border-pink-100 shadow-sm flex items-center justify-between gap-4">
@@ -86,7 +86,12 @@ export default function App() {
 
         {/* Central Heart Component: Animated Talking Judy */}
         {/* Note: To use a 3D animated GLB model with voice audio, you can also pass `audioUrl="/path/to/audio.mp3"` */}
-        <JudyAvatar isTalking={isJudyTalking} quote={judyQuote} onClick={() => {}} glbUrl="/judy.glb" />
+        <JudyAvatar
+          isTalking={isJudyTalking}
+          quote={judyQuote}
+          onClick={() => setJudyQuote("Tap a tool below and let’s make your trip easier, gorgeous.")}
+          glbUrl="/my-rigged-avatar.glb"
+        />
 
         {/* Navigation Tabs */}
         <nav className="grid grid-cols-3 bg-white/90 backdrop-blur shadow-md rounded-2xl p-1.5 border border-pink-100/50">
