@@ -85,10 +85,8 @@ export default function App() {
         </header>
 
         {/* Central Heart Component: Animated Talking Judy */}
-        {/* Note: To use a 3D animated GLB model instead of the SVG, simply pass the `glbUrl` prop. 
-            Example: <JudyAvatar isTalking={isJudyTalking} quote={judyQuote} onClick={() => {}} glbUrl="/path/to/judy.glb" />
-        */}
-        <JudyAvatar isTalking={isJudyTalking} quote={judyQuote} onClick={() => {}} />
+        {/* Note: To use a 3D animated GLB model with voice audio, you can also pass `audioUrl="/path/to/audio.mp3"` */}
+        <JudyAvatar isTalking={isJudyTalking} quote={judyQuote} onClick={() => {}} glbUrl="/judy.glb" />
 
         {/* Navigation Tabs */}
         <nav className="grid grid-cols-3 bg-white/90 backdrop-blur shadow-md rounded-2xl p-1.5 border border-pink-100/50">

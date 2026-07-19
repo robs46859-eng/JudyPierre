@@ -1,58 +1,20 @@
-# JudyPierre
+<div align="center">
+<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
+</div>
 
-A React and Three.js application powered by Google Generative AI.
+# Run and deploy your AI Studio app
 
-## Features
+This contains everything you need to run your app locally.
 
-- Interactive 3D graphics using Three.js and React Three Fiber
-- AI-powered features via Google Gemini API
-- Vite for fast development and build
-- Express server for backend integration
+View your app in AI Studio: https://ai.studio/apps/8b7eb67e-4826-4fd7-b1aa-34248fb5c921
 
-## Getting Started
+## Run Locally
 
-### Prerequisites
+**Prerequisites:**  Node.js
 
-- Node.js (v18 or higher)
-- npm or bun
-- Google Gemini API key
 
-### Installation
-
-1. Clone the repository
-2. Install dependencies:
-   ```bash
-   npm install
-   ```
-3. Create a `.env.local` file in the root directory and add your Gemini API key:
-   ```
-   GEMINI_API_KEY=your_api_key_here
-   ```
-4. Start the development server:
-   ```bash
-   npm run dev
-   ```
-
-### Building for Production
-
-```bash
-npm run build
-```
-
-### Starting the Production Server
-
-```bash
-npm start
-```
-
-## Project Structure
-
-- `src/` - Source code
-- `server.ts` - Express server entry point
-- `index.html` - Main HTML file
-- `vite.config.ts` - Vite configuration
-- `tsconfig.json` - TypeScript configuration
-
-## License
-
-MIT
+1. Install dependencies:
+   `npm install`
+2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
+3. Run the app:
+   `npm run dev`
